@@ -109,6 +109,41 @@ func (qb *QueryBuilder) Where(field string, op OpType, value interface{}) *Query
 	return qb
 }
 
+// WhereIn: Belirtilen alanda $in operatörü ile çoklu değer sorgusu
+// WhereIn: $in operatörü, tek argüman slice/bson.A ise flatten eder
+func (qb *QueryBuilder) WhereIn(field string, values ...interface{}) *QueryBuilder {
+	// flatten
+	if len(values) == 1 {
+		switch v := values[0].(type) {
+		case bson.A:
+			values = []interface{}(v)
+		case []interface{}:
+			values = v
+		case []primitive.ObjectID:
+			tmp := make([]interface{}, len(v))
+			for i, x := range v {
+				tmp[i] = x
+			}
+			values = tmp
+		}
+	}
+
+	// mevcut condition varsa merge et
+	for i, c := range qb.conditions {
+		if cond, ok := c[field]; ok {
+			m := cond.(bson.M)
+			m[string(OpTypes.In)] = values
+			qb.conditions[i] = bson.M{field: m}
+			return qb
+		}
+	}
+
+	qb.conditions = append(qb.conditions, bson.M{
+		field: bson.M{string(OpTypes.In): values},
+	})
+	return qb
+}
+
 func (qb *QueryBuilder) And(field string, op OpType, value interface{}) *QueryBuilder {
 	return qb.Where(field, op, value)
 }
@@ -173,6 +208,19 @@ func (r *MongoRepository[T]) Insert(ctx context.Context, doc *T) error {
 	return err
 }
 
+// InsertOrUpdate: belge varsa replace, yoksa insert (upsert)
+func (r *MongoRepository[T]) InsertOrUpdate(ctx context.Context, filter bson.M, doc *T) (matched, upserted int64, err error) {
+	res, err := r.Collection.ReplaceOne(ctx, filter, doc, options.Replace().SetUpsert(true))
+	if err != nil {
+		return 0, 0, err
+	}
+	var ups int64
+	if res.UpsertedID != nil {
+		ups = 1
+	}
+	return res.MatchedCount, ups, nil
+}
+
 // BulkInsert
 func (r *MongoRepository[T]) BulkInsert(ctx context.Context, docs []T) error {
 	var insertDocs []interface{}
@@ -181,6 +229,63 @@ func (r *MongoRepository[T]) BulkInsert(ctx context.Context, docs []T) error {
 	}
 	_, err := r.Collection.InsertMany(ctx, insertDocs)
 	return err
+}
+
+// BulkInsertOrUpdateSet: docs için toplu upsert ($set semantiği)
+// setFn: her doc için setlenecek alanları üretir
+func (r *MongoRepository[T]) BulkInsertOrUpdateForFields(
+	ctx context.Context,
+	docs []T,
+	filterFn func(doc T) bson.M,
+	setFn func(doc T) bson.M,
+) (matched, upserted int64, err error) {
+
+	if len(docs) == 0 {
+		return 0, 0, nil
+	}
+
+	models := make([]mongo.WriteModel, 0, len(docs))
+	for _, d := range docs {
+		u := mongo.NewUpdateOneModel().
+			SetFilter(filterFn(d)).
+			SetUpdate(bson.M{"$set": setFn(d)}).
+			SetUpsert(true)
+		models = append(models, u)
+	}
+
+	res, err := r.Collection.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	if err != nil {
+		return 0, 0, err
+	}
+	return res.MatchedCount, int64(len(res.UpsertedIDs)), nil
+}
+
+// BulkInsertOrUpdate: docs için toplu upsert (Replace semantiği)
+// filterFn: her doc için upsert filtresini üretir (ör. {"_id": doc.ID})
+func (r *MongoRepository[T]) BulkInsertOrUpdate(
+	ctx context.Context,
+	docs []T,
+	filterFn func(doc T) bson.M,
+) (matched, upserted int64, err error) {
+
+	if len(docs) == 0 {
+		return 0, 0, nil
+	}
+
+	models := make([]mongo.WriteModel, 0, len(docs))
+	for _, d := range docs {
+		m := mongo.NewReplaceOneModel().
+			SetFilter(filterFn(d)).
+			SetReplacement(d).
+			SetUpsert(true)
+		models = append(models, m)
+	}
+
+	res, err := r.Collection.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	if err != nil {
+		return 0, 0, err
+	}
+	return res.MatchedCount, int64(len(res.UpsertedIDs)), nil
 }
 
 // FindMany
@@ -242,8 +347,9 @@ func (r *MongoRepository[T]) UpdateOne(ctx context.Context, filter bson.M, updat
 }
 
 // BulkUpdate - çoklu belge güncelleme
-func (r *MongoRepository[T]) BulkUpdate(ctx context.Context, filter bson.M, update bson.M) (int64, error) {
-	res, err := r.Collection.UpdateMany(ctx, filter, bson.M{"$set": update})
+func (r *MongoRepository[T]) BulkUpdate(ctx context.Context, filter bson.M, update bson.M, upsert bool) (int64, error) {
+	opts := options.Update().SetUpsert(upsert)
+	res, err := r.Collection.UpdateMany(ctx, filter, bson.M{"$set": update}, opts)
 	if err != nil {
 		return 0, err
 	}
@@ -260,6 +366,18 @@ func (r *MongoRepository[T]) DeleteOne(ctx context.Context, filter bson.M) error
 		return errors.New("no documents deleted")
 	}
 	return nil
+}
+
+// DeleteMany - çoklu document silme
+func (r *MongoRepository[T]) DeleteMany(ctx context.Context, filter bson.M) (int64, error) {
+	res, err := r.Collection.DeleteMany(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	if res.DeletedCount == 0 {
+		return 0, errors.New("no documents deleted")
+	}
+	return res.DeletedCount, nil
 }
 
 // Aggregate

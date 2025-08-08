@@ -333,11 +333,112 @@ func main() {
 		"Message": "Bu mesaj güncellendi.2",
 	}
 
-	updatedCount, err := okeyRepo.BulkUpdate(ctx, filter, update) // upsert=false
+	updatedCount, err := okeyRepo.BulkUpdate(ctx, filter, update, false) // upsert=false
 	if err != nil {
 		panic(fmt.Sprintf("Güncelleme başarısız: %v", err))
 	}
 
 	fmt.Println(fmt.Sprintf("Tum kayitlar Başarıyla güncellendi. Total Count: [%d]", updatedCount))
 	//Updated Record-------------
+
+	//EXAMPLE-9
+	//WHEREIN() Example
+	id = mongo.ToObjectID("6851ba6fc44f8526c6643045")
+	id2 := mongo.ToObjectID("6851b616f7a2b7812087e845")
+	filter = mongo.NewQueryBuilder().
+		//WhereIn("_id", bson.A{id, id2}).
+		WhereIn("_id", id, id2).
+		Where("UserName", mongo.OpTypes.Eq, "player1").
+		Build()
+	entries, err = okeyRepo.Find(ctx, filter, nil, nil)
+	if err != nil {
+		panic(fmt.Sprintf("Belge bulunamadı: %v", err))
+	}
+	for _, entry := range entries {
+		fmt.Println("WhereIn ile bulunan kayıt:", entry.ID.Hex())
+	}
+
+	//EXAMPLE 10
+	//BULKINSERT Test
+
+	// User repository oluştur
+	userColl := client.Database("101Okey").Collection("Users")
+	userRepo := mongo.MongoRepository[mongo.User]{Collection: userColl}
+
+	// Eklenecek kullanıcılar
+	users := []mongo.User{
+		{
+			ID:       4,
+			UserName: "player4",
+			Email:    "player4@example.com",
+		},
+		{
+			ID:       5,
+			UserName: "player5",
+			Email:    "player5@example.com",
+		},
+	}
+
+	// BulkInsert çağır
+	if err := userRepo.BulkInsert(ctx, users); err != nil {
+		panic(fmt.Sprintf("Kullanıcı eklenemedi: %v", err))
+	}
+
+	fmt.Println("✅ 2 kullanıcı başarıyla eklendi.")
+
+	//EXAMPLE 11
+	//InsetOrUpdate() Test
+	user := mongo.User{
+		ID:       4,
+		UserName: "player4",
+		Email:    "player666@example.com",
+	}
+	matched, upserted, err := userRepo.InsertOrUpdate(ctx, bson.M{"_id": user.ID}, &user)
+	if err != nil {
+		panic(fmt.Sprintf("Kullanıcı eklenemedi: %v", err))
+	}
+	fmt.Printf("matched=%d, upserted=%d\n", matched, upserted)
+
+	//EXAMPLE 12
+	//DELETEMANY() Test
+	userColl = client.Database("101Okey").Collection("Users")
+	userRepo = mongo.MongoRepository[mongo.User]{Collection: userColl}
+
+	filter = mongo.NewQueryBuilder().
+		WhereIn("_id", 4, 5).
+		Build()
+	deletedCount, err := userRepo.DeleteMany(ctx, filter)
+	if err != nil {
+		panic(fmt.Sprintf("Silme hatası: %v", err))
+	}
+
+	fmt.Printf("✅ %d kullanıcı silindi.\n", deletedCount)
+
+	//EXAMPLE 13
+	//BulkInsertOrUpdate()
+
+	users = []mongo.User{
+		{ID: 42, UserName: "bora", Email: "p1@example.com"},
+		{ID: 3, UserName: "player2", Email: "p2@example.com"},
+	}
+
+	matched, upserted, err = userRepo.BulkInsertOrUpdate(ctx, users, func(u mongo.User) bson.M {
+		return bson.M{"_id": u.ID}
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("matched=%d, upserted=%d\n", matched, upserted)
+
+	//Delete New player2
+	filter = mongo.NewQueryBuilder().
+		WhereIn("_id", 3).
+		Build()
+	_, _ = userRepo.DeleteMany(ctx, filter)
+
+	//Update bora Email = bora@mail.com
+	user = mongo.User{ID: 42, UserName: "bora", Email: "bora@mail.com"}
+	_, _, _ = userRepo.InsertOrUpdate(ctx, bson.M{"_id": user.ID}, &user)
+
 }
