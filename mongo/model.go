@@ -1,6 +1,9 @@
 package mongo
 
-import "time"
+import (
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"time"
+)
 
 type Tile struct {
 	ID      int  `bson:"ID"`
@@ -16,9 +19,10 @@ type Tile struct {
 }
 
 type LogEntry struct {
-	LogID     string    `bson:"LogID"`     // Benzersiz log ID'si (örnek: UUID)
-	DateTime  time.Time `bson:"DateTime"`  // İnsan okunabilir zaman
-	TimeStamp time.Time `bson:"TimeStamp"` // Query ve sıralama için kullanılan zaman
+	ID        primitive.ObjectID `bson:"_id"`
+	LogID     string             `bson:"LogID"`     // Benzersiz log ID'si (örnek: UUID)
+	DateTime  time.Time          `bson:"DateTime"`  // İnsan okunabilir zaman
+	TimeStamp time.Time          `bson:"TimeStamp"` // Query ve sıralama için kullanılan zaman
 
 	OrderID    int64  `bson:"OrderID"`
 	UserID     int64  `bson:"UserID"`

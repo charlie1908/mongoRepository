@@ -42,6 +42,32 @@ type opTypes struct {
 
 type OpType string
 
+// Mock Data ve Unuit Test icin Interface Repository
+type Reader[T any] interface {
+	Find(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination) ([]T, error)
+	FindOne(ctx context.Context, filter bson.M) (*T, error)
+}
+
+type Writer[T any] interface {
+	Insert(ctx context.Context, doc *T) error
+	BulkInsert(ctx context.Context, docs []T) error
+	UpdateOne(ctx context.Context, filter bson.M, update bson.M, upsert bool) error
+	BulkUpdate(ctx context.Context, filter bson.M, update bson.M) (int64, error)
+	DeleteOne(ctx context.Context, filter bson.M) error
+}
+
+type Aggregator[T any] interface {
+	Aggregate(ctx context.Context, builder *AggregateBuilder) ([]bson.M, error)
+}
+
+type Repository[T any] interface {
+	Reader[T]
+	Writer[T]
+	Aggregator[T]
+}
+
+//-------------Interface Description Finished--------
+
 // Query: Tekli sorgu
 type Query struct {
 	Field string
@@ -62,8 +88,24 @@ func NewQueryBuilder() *QueryBuilder {
 	return &QueryBuilder{conditions: []bson.M{}}
 }
 
-func (qb *QueryBuilder) Where(field string, op OpType, value interface{}) *QueryBuilder {
+/*func (qb *QueryBuilder) Where(field string, op OpType, value interface{}) *QueryBuilder {
 	qb.conditions = append(qb.conditions, Query{field, op, value}.ToBSON())
+	return qb
+}*/
+
+// Biden fazla where pes pese kullanilabilsin diye Merge ediliyor..
+func (qb *QueryBuilder) Where(field string, op OpType, value interface{}) *QueryBuilder {
+	// Var olan condition’ı bul & merge et
+	for i, c := range qb.conditions {
+		if cond, ok := c[field]; ok {
+			// cond genelde bson.M
+			m := cond.(bson.M)
+			m[string(op)] = value
+			qb.conditions[i] = bson.M{field: m}
+			return qb
+		}
+	}
+	qb.conditions = append(qb.conditions, bson.M{field: bson.M{string(op): value}})
 	return qb
 }
 
@@ -199,6 +241,15 @@ func (r *MongoRepository[T]) UpdateOne(ctx context.Context, filter bson.M, updat
 	return nil
 }
 
+// BulkUpdate - çoklu belge güncelleme
+func (r *MongoRepository[T]) BulkUpdate(ctx context.Context, filter bson.M, update bson.M) (int64, error) {
+	res, err := r.Collection.UpdateMany(ctx, filter, bson.M{"$set": update})
+	if err != nil {
+		return 0, err
+	}
+	return res.ModifiedCount, nil
+}
+
 // DeleteOne
 func (r *MongoRepository[T]) DeleteOne(ctx context.Context, filter bson.M) error {
 	res, err := r.Collection.DeleteOne(ctx, filter)
@@ -289,6 +340,27 @@ func (ab *AggregateBuilder) Group(id interface{}, fields bson.M) *AggregateBuild
 func (ab *AggregateBuilder) Sort(field string, direction int) *AggregateBuilder {
 	ab.pipeline = append(ab.pipeline, bson.D{{Key: "$sort", Value: bson.D{{Key: field, Value: direction}}}})
 	return ab
+}
+
+type SortField struct {
+	Field string
+	Asc   bool
+}
+type SortOptions struct{ Fields []SortField }
+
+func Sorts(so *SortOptions) bson.D {
+	if so == nil {
+		return nil
+	}
+	d := bson.D{}
+	for _, f := range so.Fields {
+		v := 1
+		if !f.Asc {
+			v = -1
+		}
+		d = append(d, bson.E{Key: f.Field, Value: v})
+	}
+	return d
 }
 
 // $project

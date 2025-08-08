@@ -247,4 +247,97 @@ func main() {
 		count := doc["TotalLogs"]
 		fmt.Printf("📧 %v => 📊 %v log\n", email, count)
 	}
+
+	//EXAMPLE - 8 MULTIPLE SORT
+	//Normal Desc Select By DateTime
+	// 1. Filtre: tüm kayıtlar
+	fmt.Printf("MULTIPLE SORT EXAMPLE\n")
+	filterSelect = mongo.NewQueryBuilder().Build()
+
+	// Çok alanlı sıralama
+	sortOpts := &mongo.SortOptions{
+		Fields: []mongo.SortField{
+			{Field: "DateTime", Asc: false}, // DESC
+			{Field: "_id", Asc: true},       // ASC
+		},
+	}
+
+	// 3. Projeksiyon: sadece gerekli alanlar
+	projection = bson.M{
+		"Message":  1,
+		"UserName": 1,
+		"UserID":   1,
+		"OrderID":  1,
+		"DateTime": 1,
+		"_id":      1,
+	}
+
+	// 4. Find doğrudan Collection üstünden (repo.Find ile değil)
+	findOptions = options.Find().
+		SetSort(mongo.Sorts(sortOpts)).
+		SetProjection(projection).
+		SetLimit(5)
+
+	cursor, err = okeyRepo.Collection.Find(ctx, filterSelect, findOptions)
+	if err != nil {
+		log.Fatal("Mongo Find hatası:", err)
+	}
+	defer cursor.Close(ctx)
+
+	// 5. Sonuçları yazdır
+	for cursor.Next(ctx) {
+		var doc bson.M
+		if err := cursor.Decode(&doc); err != nil {
+			log.Fatal(err)
+		}
+
+		message := doc["Message"]
+		userName := doc["UserName"]
+		userID := doc["UserID"]
+		orderID := doc["OrderID"]
+		dateTime := doc["DateTime"].(primitive.DateTime)
+		id := doc["_id"].(primitive.ObjectID).Hex()
+
+		fmt.Printf(
+			"[🕒 %s] 🧑 %v (ID: %v) - 📦 OrderID: %v - 💬 %v - _id: %v\n",
+			dateTime.Time().Format("2006-01-02 15:04:05"),
+			userName, userID, orderID, message, id,
+		)
+		//-------------------
+	}
+
+	//EXAMPLE-8
+	//BULK Update Record - MULTIPLE WHERE-------------
+	id = mongo.ToObjectID("6851ba6fc44f8526c6643045")
+	//id2 := mongo.ToObjectID("6851b616f7a2b7812087e845")
+
+	// Filter: _id ve _id2 ile sorgula
+	filter = mongo.NewQueryBuilder().
+		//Where("_id", mongo.OpTypes.In, bson.A{id, id2}).
+		Where("_id", mongo.OpTypes.Eq, id).
+		Where("UserName", mongo.OpTypes.Eq, "player1").
+		Build()
+
+	// 🔍 1. Find ile hepsini getir..
+	entries, err := okeyRepo.Find(ctx, filter, nil, nil)
+	if err != nil {
+		panic(fmt.Sprintf("Belge bulunamadı: %v", err))
+	}
+
+	for _, entry := range entries {
+		fmt.Println("Güncellenecek kayıt:", entry.ID.Hex())
+	}
+
+	// 🔄 2. UpdateOne ile güncelle
+	update = map[string]interface{}{
+		"Message": "Bu mesaj güncellendi.2",
+	}
+
+	updatedCount, err := okeyRepo.BulkUpdate(ctx, filter, update) // upsert=false
+	if err != nil {
+		panic(fmt.Sprintf("Güncelleme başarısız: %v", err))
+	}
+
+	fmt.Println(fmt.Sprintf("Tum kayitlar Başarıyla güncellendi. Total Count: [%d]", updatedCount))
+	//Updated Record-------------
 }
