@@ -526,3 +526,64 @@ func (ab *AggregateBuilder) Count(alias string) *AggregateBuilder {
 func (ab *AggregateBuilder) Build() mongo.Pipeline {
 	return ab.pipeline
 }
+
+// === AggregateBuilder Helpers Multi Relation ===
+
+// $unwind (preserveNullAndEmptyArrays: true)
+func (ab *AggregateBuilder) UnwindPreserveNull(field string) *AggregateBuilder {
+	ab.pipeline = append(ab.pipeline, bson.D{{Key: "$unwind", Value: bson.M{
+		"path": "$" + field, "preserveNullAndEmptyArrays": true,
+	}}})
+	return ab
+}
+
+// $project: verilen alanları 1 yap (bsonsuz kısa yazım)
+func (ab *AggregateBuilder) ProjectKeep(fields ...string) *AggregateBuilder {
+	if len(fields) == 0 {
+		return ab
+	}
+	m := bson.M{}
+	for _, f := range fields {
+		m[f] = 1
+	}
+	ab.pipeline = append(ab.pipeline, bson.D{{Key: "$project", Value: m}})
+	return ab
+}
+
+// $addFields: alias = expr çiftlerini tek seferde ekle
+// Örn: ProjectAliases("UserName","$user.UserName","Email","$user.Email")
+func (ab *AggregateBuilder) ProjectAliases(pairs ...string) *AggregateBuilder {
+	if len(pairs)%2 != 0 {
+		return ab
+	} // güvenlik: çift olmalı
+	m := bson.M{}
+	for i := 0; i < len(pairs); i += 2 {
+		m[pairs[i]] = pairs[i+1]
+	}
+	ab.pipeline = append(ab.pipeline, bson.D{{Key: "$addFields", Value: m}})
+	return ab
+}
+
+// _id'yi gizlemek için kısa yol
+func (ab *AggregateBuilder) ExcludeID() *AggregateBuilder {
+	ab.pipeline = append(ab.pipeline, bson.D{{Key: "$project", Value: bson.M{"_id": 0}}})
+	return ab
+}
+
+// === Aggregate with options (opsiyonel) ===
+func (r *MongoRepository[T]) AggregateWithOptions(
+	ctx context.Context,
+	builder *AggregateBuilder,
+	opts *options.AggregateOptions,
+) ([]bson.M, error) {
+	cursor, err := r.Collection.Aggregate(ctx, builder.Build(), opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []bson.M
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}

@@ -441,4 +441,48 @@ func main() {
 	user = mongo.User{ID: 42, UserName: "bora", Email: "bora@mail.com"}
 	_, _, _ = userRepo.InsertOrUpdate(ctx, bson.M{"_id": user.ID}, &user)
 
+	//EXAMPLE 14
+	//LOOKUP() 3 Collections
+	builderLookup = mongo.NewAggregateBuilder().
+		Lookup("Users", "UserID", "_id", "user").
+		Unwind("user").
+		Lookup("UserOrders", "user._id", "UserID", "uo").
+		UnwindPreserveNull("uo").
+		Lookup("Orders", "uo.OrderID", "_id", "order").
+		UnwindPreserveNull("order").
+		ProjectAliases(
+			"UserID", "$UserID",
+			"Message", "$Message",
+			"DateTime", "$DateTime",
+			"UserName", "$user.UserName",
+			"Email", "$user.Email",
+			"OrderID", "$order._id",
+			"OrderCode", "$order.Code",
+			"OrderTotal", "$order.Total",
+		).
+		ProjectKeep("OrderID", "UserName", "OrderCode", "OrderTotal").
+		ExcludeID().
+		Sort("DateTime", -1).
+		Limit(20)
+	// Standart çağrı:
+	resLookup, err := okeyRepo.Aggregate(ctx, builderLookup)
+	// veya büyük dataset için:
+	// res, err := okeyRepo.AggregateWithOptions(ctx, builder, options.Aggregate().SetAllowDiskUse(true))
+
+	if err != nil {
+		log.Fatal("Aggregate hatası:", err)
+	}
+
+	for _, doc := range resLookup {
+		orderCode := doc["OrderCode"]
+		userName := doc["UserName"]
+		orderID := doc["OrderID"]
+		orderTotal := doc["OrderTotal"]
+
+		fmt.Printf(
+			"🧑 UserName: %s - OrderCode: %s - 📦 OrderID: %v - OrderTotal: %v\n",
+			userName, orderCode, orderID, orderTotal,
+		)
+		//-------------------
+	}
 }
