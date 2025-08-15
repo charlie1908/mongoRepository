@@ -380,6 +380,72 @@ func (r *MongoRepository[T]) DeleteMany(ctx context.Context, filter bson.M) (int
 	return res.DeletedCount, nil
 }
 
+func (r *MongoRepository[T]) DeleteOneSoft(ctx context.Context, filter bson.M, deletedBy string) error {
+	if filter == nil {
+		filter = bson.M{}
+	}
+	// Don't target already-deleted docs unless caller explicitly overrides
+	if _, ok := filter["IsDeleted"]; !ok {
+		filter["IsDeleted"] = bson.M{"$ne": true}
+	}
+
+	now := time.Now().UTC()
+	update := bson.M{"$set": bson.M{
+		"IsDeleted": true,
+		"DeletedAt": &now, // pointer field in your model
+		"DeletedBy": deletedBy,
+	}}
+
+	res, err := r.Collection.UpdateOne(ctx, filter, update, options.Update().SetUpsert(false))
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return errors.New("no documents matched")
+	}
+	if res.ModifiedCount == 0 {
+		return errors.New("document matched but not modified (maybe already soft-deleted)")
+	}
+	return nil
+}
+
+func (r *MongoRepository[T]) DeleteManySoft(ctx context.Context, filter bson.M, deletedBy string) (int64, error) {
+	if filter == nil {
+		filter = bson.M{}
+	}
+	if _, ok := filter["IsDeleted"]; !ok {
+		filter["IsDeleted"] = bson.M{"$ne": true}
+	}
+
+	now := time.Now().UTC()
+	update := bson.M{"$set": bson.M{
+		"IsDeleted": true,
+		"DeletedAt": &now,
+		"DeletedBy": deletedBy,
+	}}
+
+	res, err := r.Collection.UpdateMany(ctx, filter, update)
+	if err != nil {
+		return 0, err
+	}
+	if res.MatchedCount == 0 {
+		return 0, errors.New("no documents matched")
+	}
+	if res.ModifiedCount == 0 {
+		return 0, errors.New("documents matched but not modified (maybe already soft-deleted)")
+	}
+	return res.ModifiedCount, nil
+}
+
+// filter := NumericIDsFilter(42, 43, 44)
+func NumericIDsFilter(ids ...int64) bson.M {
+	in := make([]any, 0, len(ids)*2)
+	for _, id := range ids {
+		in = append(in, int32(id), int64(id)) // match both NumberInt and NumberLong
+	}
+	return bson.M{"_id": bson.M{"$in": in}}
+}
+
 // Aggregate
 /*func (r *MongoRepository[T]) Aggregate(ctx context.Context, pipeline mongo.Pipeline) ([]bson.M, error) {
 	cursor, err := r.Collection.Aggregate(ctx, pipeline)
@@ -587,3 +653,16 @@ func (r *MongoRepository[T]) AggregateWithOptions(
 	}
 	return results, nil
 }
+
+/* Mongo Update Collection
+db.Users.updateMany(
+    {},
+    {
+        $set: {
+            IsDeleted: false,
+            DeletedBy: null,
+            DeletedAt: null
+        }
+    }
+)
+*/

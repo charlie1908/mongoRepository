@@ -485,4 +485,41 @@ func main() {
 		)
 		//-------------------
 	}
+
+	//Example 15
+	//DeleteOneSoft
+	userColl = client.Database("101Okey").Collection("Users")
+	userRepo = mongo.MongoRepository[mongo.User]{Collection: userColl}
+
+	id64 := int64(42)
+	filter = bson.M{"_id": id64}
+
+	if err := userRepo.DeleteOneSoft(ctx, filter, "bora"); err != nil {
+		log.Println("DeleteOneSoft error:", err)
+	} else {
+		log.Println("User soft deleted successfully")
+	}
+
+	//Example 16
+	//DeleteManySoft
+	filter = mongo.NumericIDsFilter(43, 44)
+	_, err = userRepo.DeleteManySoft(ctx, filter, "bora")
+	if err != nil {
+		log.Println("DeleteManySoft error:", err)
+	} else {
+		log.Println("DeleteManySoft successfully")
+	}
+
+	//Example 17
+	//DeleteOneSoft By Email
+	userColl = client.Database("101Okey").Collection("Users")
+	userRepo = mongo.MongoRepository[mongo.User]{Collection: userColl}
+
+	filter = bson.M{"_id": id64}
+
+	if err := userRepo.DeleteOneSoft(ctx, filter, "bora"); err != nil {
+		log.Println("DeleteOneSoft error:", err)
+	} else {
+		log.Println("User soft deleted successfully")
+	}
 }
