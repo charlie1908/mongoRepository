@@ -34,6 +34,8 @@ func main() {
 		Build()
 
 	// 🔍 1. FindOne ile getir
+	//var isDeleted = true
+	//entry, err := okeyRepo.FindOne(ctx, filter, &isDeleted)
 	entry, err := okeyRepo.FindOne(ctx, filter)
 	if err != nil {
 		panic(fmt.Sprintf("Belge bulunamadı: %v", err))
@@ -89,6 +91,38 @@ func main() {
 	results, err := okeyRepo.Aggregate(ctx, builder)
 	for _, doc := range results {
 		fmt.Printf("UserID: %v - Toplam Log: %v\n", doc["userId"], doc["total"])
+	}
+	//------------------
+
+	//EXAMPLE-3.1
+	//Multi GroupBy [UserID, GameID]
+	builder = mongo.NewAggregateBuilder().
+		Match(bson.M{"ActionType": 6}).
+		Group(
+			bson.M{
+				"userId": "$UserID", // 👈 birden fazla field
+				"gameId": "$GameID",
+			},
+			bson.M{
+				"total": bson.M{"$sum": 1},
+			},
+		).
+		Sort("total", -1).
+		Project(bson.M{
+			"userId": "$_id.userId",
+			"gameId": "$_id.gameId",
+			"total":  1,
+			"_id":    0,
+		}).
+		Limit(10)
+
+	results, err = okeyRepo.Aggregate(ctx, builder)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, doc := range results {
+		fmt.Printf("UserID: %v - GameID: %v - Toplam Log: %v\n", doc["userId"], doc["gameId"], doc["total"])
 	}
 	//------------------
 

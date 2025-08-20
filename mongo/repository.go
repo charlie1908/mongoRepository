@@ -289,7 +289,7 @@ func (r *MongoRepository[T]) BulkInsertOrUpdate(
 }
 
 // FindMany
-func (r *MongoRepository[T]) Find(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination) ([]T, error) {
+/*func (r *MongoRepository[T]) Find(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination) ([]T, error) {
 	findOptions := options.Find()
 	if sort != nil {
 		direction := 1
@@ -318,14 +318,94 @@ func (r *MongoRepository[T]) Find(ctx context.Context, filter bson.M, sort *Sort
 		results = append(results, item)
 	}
 	return results, nil
+}*/
+
+// FindMany
+// Find: opsiyonel IsDeleted predicate (variadic ...*bool)
+// isDeleted verilirse ve nil değilse filtreye IsDeleted koşulu eklenir.
+// Default Sadece aktif (silinmemiş) kayıtlar getirilir.
+func (r *MongoRepository[T]) Find(
+	ctx context.Context,
+	filter bson.M,
+	sort *SortOption,
+	pagination *Pagination,
+	isDeleted ...*bool, // ✅ opsiyonel predicate
+) ([]T, error) {
+
+	// Opsiyonel IsDeleted koşulu
+	if len(isDeleted) > 0 && isDeleted[0] != nil {
+		filter["IsDeleted"] = *isDeleted[0]
+	} else {
+		filter["IsDeleted"] = false
+	}
+
+	findOptions := options.Find()
+	if sort != nil {
+		direction := 1
+		if !sort.Ascending {
+			direction = -1
+		}
+		findOptions.SetSort(bson.D{{Key: sort.Field, Value: direction}})
+	}
+	if pagination != nil {
+		findOptions.SetLimit(pagination.Limit)
+		findOptions.SetSkip(pagination.Skip)
+	}
+
+	cursor, err := r.Collection.Find(ctx, filter, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var results []T
+	for cursor.Next(ctx) {
+		var item T
+		if err := cursor.Decode(&item); err != nil {
+			return nil, err
+		}
+		results = append(results, item)
+	}
+
+	// 🔎 döngü sonrası cursor hatasını kontrol et
+	if err := cursor.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
 // FindOne
-func (r *MongoRepository[T]) FindOne(ctx context.Context, filter bson.M) (*T, error) {
+/*func (r *MongoRepository[T]) FindOne(ctx context.Context, filter bson.M) (*T, error) {
 	result := r.Collection.FindOne(ctx, filter)
 	if result.Err() != nil {
 		return nil, result.Err()
 	}
+	var item T
+	if err := result.Decode(&item); err != nil {
+		return nil, err
+	}
+	return &item, nil
+}*/
+// FindOne With Optional IsDeleted Parameter
+// Default Sadece aktif (silinmemiş) kayıdi getirir.
+func (r *MongoRepository[T]) FindOne(
+	ctx context.Context,
+	filter bson.M,
+	isDeleted ...*bool, // ✅ opsiyonel predicate
+) (*T, error) {
+	// Eğer parametre verilmişse ve nil değilse filtreye uygula
+	if len(isDeleted) > 0 && isDeleted[0] != nil {
+		filter["IsDeleted"] = *isDeleted[0]
+	} else {
+		filter["IsDeleted"] = false
+	}
+
+	result := r.Collection.FindOne(ctx, filter)
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
 	var item T
 	if err := result.Decode(&item); err != nil {
 		return nil, err
