@@ -44,20 +44,47 @@ type OpType string
 
 // Mock Data ve Unuit Test icin Interface Repository
 type Reader[T any] interface {
-	Find(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination) ([]T, error)
-	FindOne(ctx context.Context, filter bson.M) (*T, error)
+	// Default: IsDeleted=false (aktif kayıtlar). İstersen &[]bool{true}[0] ile silinmişleri çek.
+	Find(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination, isDeleted ...*bool) ([]T, error)
+	FindOne(ctx context.Context, filter bson.M, isDeleted ...*bool) (*T, error)
+	FindWithCount(ctx context.Context, filter bson.M, sort *SortOption, pagination *Pagination, isDeleted ...*bool) ([]T, int64, error)
+
+	// Paging/raporlama için şart
+	Count(ctx context.Context, filter bson.M, isDeleted ...*bool) (int64, error)
 }
 
 type Writer[T any] interface {
-	Insert(ctx context.Context, doc *T) error
+	// Insert’ler
+	Insert(ctx context.Context, doc *T) (interface{}, error)
 	BulkInsert(ctx context.Context, docs []T) error
+	BulkInsertWithIDs(ctx context.Context, docs []T) ([]interface{}, error)
+
+	// Upsert (replace semantiği)
+	InsertOrUpdate(ctx context.Context, filter bson.M, doc *T) (matched, upserted int64, err error)
+	BulkInsertOrUpdate(ctx context.Context, docs []T, filterFn func(doc T) bson.M) (matched, upserted int64, err error)
+
+	// Upsert ($set semantiği – alan bazlı)
+	BulkInsertOrUpdateForFields(ctx context.Context, docs []T, filterFn func(doc T) bson.M, setFn func(doc T) bson.M) (matched, upserted int64, err error)
+
+	// Update’ler
 	UpdateOne(ctx context.Context, filter bson.M, update bson.M, upsert bool) error
-	BulkUpdate(ctx context.Context, filter bson.M, update bson.M) (int64, error)
+	BulkUpdate(ctx context.Context, filter bson.M, update bson.M, upsert bool) (int64, error)
+
+	// (Opsiyonel ama çok faydalı) Güncellenmiş dokümanı döndür
+	FindOneAndUpdate(ctx context.Context, filter bson.M, update bson.M, returnAfter bool, upsert bool) (*T, error)
+
+	// Delete’ler
 	DeleteOne(ctx context.Context, filter bson.M) error
+	DeleteMany(ctx context.Context, filter bson.M) (int64, error)
+
+	// Soft-delete (back-office için ideal)
+	DeleteOneSoft(ctx context.Context, filter bson.M, deletedBy string) error
+	DeleteManySoft(ctx context.Context, filter bson.M, deletedBy string) (int64, error)
 }
 
 type Aggregator[T any] interface {
 	Aggregate(ctx context.Context, builder *AggregateBuilder) ([]bson.M, error)
+	AggregateWithOptions(ctx context.Context, builder *AggregateBuilder, opts *options.AggregateOptions) ([]bson.M, error)
 }
 
 type Repository[T any] interface {
@@ -203,9 +230,17 @@ type MongoRepository[T any] struct {
 }
 
 // InsertOne
-func (r *MongoRepository[T]) Insert(ctx context.Context, doc *T) error {
+/*func (r *MongoRepository[T]) Insert(ctx context.Context, doc *T) error {
 	_, err := r.Collection.InsertOne(ctx, doc)
 	return err
+}*/
+
+func (r *MongoRepository[T]) Insert(ctx context.Context, doc *T) (interface{}, error) {
+	res, err := r.Collection.InsertOne(ctx, doc)
+	if err != nil {
+		return nil, err
+	}
+	return res.InsertedID, nil
 }
 
 // InsertOrUpdate: belge varsa replace, yoksa insert (upsert)
@@ -229,6 +264,20 @@ func (r *MongoRepository[T]) BulkInsert(ctx context.Context, docs []T) error {
 	}
 	_, err := r.Collection.InsertMany(ctx, insertDocs)
 	return err
+}
+
+// BulkInsert With Inserted IDS
+func (r *MongoRepository[T]) BulkInsertWithIDs(ctx context.Context, docs []T) ([]interface{}, error) {
+	var insertDocs []interface{}
+	for _, d := range docs {
+		insertDocs = append(insertDocs, d)
+	}
+
+	res, err := r.Collection.InsertMany(ctx, insertDocs)
+	if err != nil {
+		return nil, err
+	}
+	return res.InsertedIDs, nil
 }
 
 // BulkInsertOrUpdateSet: docs için toplu upsert ($set semantiği)
@@ -732,6 +781,66 @@ func (r *MongoRepository[T]) AggregateWithOptions(
 		return nil, err
 	}
 	return results, nil
+}
+
+func (r *MongoRepository[T]) Count(ctx context.Context, filter bson.M, isDeleted ...*bool) (int64, error) {
+	if len(isDeleted) > 0 && isDeleted[0] != nil {
+		filter["IsDeleted"] = *isDeleted[0]
+	} else {
+		filter["IsDeleted"] = false
+	}
+	return r.Collection.CountDocuments(ctx, filter)
+}
+
+// page: 1-based (1,2,3,...)  | pageSize: >0
+func MakePagination(page, pageSize int64) *Pagination {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	skip := (page - 1) * pageSize
+	return &Pagination{Limit: pageSize, Skip: skip}
+}
+
+// ortak helper (mutates)
+func ensureActiveFilter(filter bson.M, isDeleted ...*bool) {
+	if len(isDeleted) > 0 && isDeleted[0] != nil {
+		filter["IsDeleted"] = *isDeleted[0]
+		return
+	}
+	if _, ok := filter["IsDeleted"]; !ok {
+		filter["IsDeleted"] = false
+	}
+}
+
+// FindWithCount: aynı filtreyle toplam sayıyı ve sayfa verisini döndürür
+// Default IsDeleted = false
+func (r *MongoRepository[T]) FindWithCount(
+	ctx context.Context,
+	filter bson.M,
+	sort *SortOption,
+	pagination *Pagination,
+	isDeleted ...*bool,
+) ([]T, int64, error) {
+
+	// 👉 Dışarıdaki filter’ı klonlamadan, aynı referans üzerinde çalış
+	ensureActiveFilter(filter, isDeleted...)
+
+	// 1) Toplam
+	total, err := r.Collection.CountDocuments(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 2) Sayfa verisi (ister r.Find ile, ister direkt Collection.Find ile)
+	items, err := r.Find(ctx, filter, sort, pagination, isDeleted...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return items, total, nil
 }
 
 /* Mongo Update Collection

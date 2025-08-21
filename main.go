@@ -556,4 +556,48 @@ func main() {
 	} else {
 		log.Println("User soft deleted successfully")
 	}
+
+	//Example 18 MakePagination(), Count(),
+	filter = bson.M{"UserName": "player1"}
+	total, err := okeyRepo.Count(ctx, filter)
+	if err != nil {
+		log.Fatal("Count error:", err)
+	}
+	fmt.Println("Count():", total)
+
+	// 2) Paging ayarları
+	/*	pageSize = int64(3)
+		page = 3 // 3. sayfa
+		skip := (int64(page) - 1) * pageSize
+
+		pagination = &mongo.Pagination{
+			Limit: pageSize,
+			Skip:  skip,
+		}*/
+	currentPage := int64(3)
+	pageSize = int64(3)
+
+	newPagination := mongo.MakePagination(currentPage, pageSize)
+
+	// (Opsiyonel) Sıralama: en yeni önce
+	sort = &mongo.SortOption{Field: "DateTime", Ascending: false}
+
+	// 3) Sayfadaki kayıtları çek
+	items, totalCount, err := okeyRepo.FindWithCount(ctx, filter, sort, newPagination) // default IsDeleted=false
+	//items, totalCount, err := okeyRepo.FindWithCount(ctx, filter, sort, &mongo.Pagination{Limit: 3, Skip: 6}) // default IsDeleted=false
+	if err != nil {
+		log.Fatal("Find error:", err)
+	}
+
+	fmt.Printf("Toplam kayıt: %d, Sayfadaki kayıt: %d\n", totalCount, len(items))
+	for _, item := range items {
+		fmt.Println(item)
+	}
+
+	// toplam sayfa (ceiling division)
+	totalPages := int64(0)
+	if totalCount > 0 {
+		totalPages = (totalCount + pageSize - 1) / pageSize
+	}
+	fmt.Printf("Sayfa %d/%d\n", currentPage, totalPages)
 }
